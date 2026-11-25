@@ -114,6 +114,25 @@ struct ReviewDraft: Codable {
     }
 }
 
+struct ReviewSession: Identifiable {
+    let id: UUID
+    let draft: ReviewDraft
+    let analysis: CutAnalysis?
+    let excludedCandidates: Set<UUID>
+    let preparationNotes: [String]
+    let documentURL: URL?
+    let savedURL: URL?
+    let status: String
+
+    var filename: String { URL(fileURLWithPath: draft.recording).lastPathComponent }
+}
+
+struct ImportProgress {
+    let filename: String
+    let position: Int
+    let total: Int
+}
+
 struct CropOptions: Hashable {
     let path: String
     let zoom: Double
@@ -248,7 +267,17 @@ enum Runner {
 
 @MainActor
 final class ReviewModel: ObservableObject {
-    @Published var draft = ReviewDraft()
+    static let importLimit = 10
+
+    @Published var draft = ReviewDraft() {
+        didSet {
+            if !busy && importProgress == nil &&
+                (draft.phrases != oldValue.phrases || draft.start != oldValue.start ||
+                 draft.end != oldValue.end || draft.amenEnd != oldValue.amenEnd) {
+                clearAnalysis()
+            }
+        }
+    }
     @Published var busy = false
     @Published var analysisBusy = false
     @Published var analysisProgress = 0.0
@@ -261,6 +290,9 @@ final class ReviewModel: ObservableObject {
     @Published private var excludedCandidates: Set<UUID> = []
     @Published var preparationNotes: [String] = []
     @Published var sharedAssets = SharedAssets()
+    @Published private(set) var sessions: [ReviewSession] = []
+    @Published private(set) var activeSessionID: UUID?
+    @Published private(set) var importProgress: ImportProgress?
     let voicePlayer = AVPlayer()
     let musicPlayer = AVPlayer()
     private let splicePlayer = AVPlayer()
@@ -316,6 +348,8 @@ final class ReviewModel: ObservableObject {
             let loaded = try await Task.detached {
                 try JSONDecoder().decode(ReviewDraft.self, from: Runner.call(["load", url.path]))
             }.value
+            rememberCurrentSession()
+            activeSessionID = nil
             draft = loaded
             clearAnalysis()
             preparationNotes = []
@@ -328,6 +362,7 @@ final class ReviewModel: ObservableObject {
             installRecording()
             installMusic()
             status = "\(url.lastPathComponent) 열림"
+            rememberCurrentSession()
         } catch { self.error = error.localizedDescription }
     }
 
@@ -336,6 +371,22 @@ final class ReviewModel: ObservableObject {
         panel.allowedContentTypes = types
         panel.allowsMultipleSelection = false
         return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    func chooseRecordings() async -> [URL] {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie, .audio]
+        panel.allowsMultipleSelection = true
+        panel.message = "한 번에 최대 \(Self.importLimit)개의 영상을 선택하세요."
+        while await panel.begin() == .OK {
+            if panel.urls.count <= Self.importLimit { return panel.urls }
+            let alert = NSAlert()
+            alert.messageText = "최대 \(Self.importLimit)개까지 선택할 수 있습니다."
+            alert.addButton(withTitle: "다시 선택")
+            alert.addButton(withTitle: "취소")
+            if alert.runModal() != .alertFirstButtonReturn { break }
+        }
+        return []
     }
 
     func destination(_ title: String) -> URL? {
@@ -347,13 +398,61 @@ final class ReviewModel: ObservableObject {
         return panel.runModal() == .OK ? panel.url : nil
     }
 
-    func newRecording(_ url: URL) async {
+    func importRecordings(_ urls: [URL]) async {
+        guard !busy, importProgress == nil, !urls.isEmpty, urls.count <= Self.importLimit else { return }
+        rememberCurrentSession()
+        let defaults = draft
+        let firstIndex = sessions.count
+        defer { importProgress = nil }
+        for (index, url) in urls.enumerated() {
+            importProgress = ImportProgress(filename: url.lastPathComponent, position: index + 1, total: urls.count)
+            activeSessionID = nil
+            await prepareNewRecording(url, defaults: defaults)
+            rememberCurrentSession()
+        }
+        let imported = sessions[firstIndex...]
+        if let first = imported.first(where: { !$0.draft.phrases.isEmpty }) ?? imported.first {
+            switchSession(to: first.id)
+        }
+    }
+
+    private func rememberCurrentSession() {
+        guard !draft.recording.isEmpty else { return }
+        let id = activeSessionID ?? UUID()
+        let session = ReviewSession(id: id, draft: draft, analysis: analysis, excludedCandidates: excludedCandidates,
+                                    preparationNotes: preparationNotes, documentURL: documentURL,
+                                    savedURL: savedURL, status: status)
+        if let index = sessions.firstIndex(where: { $0.id == id }) {
+            sessions[index] = session
+        } else {
+            sessions.append(session)
+        }
+        activeSessionID = id
+    }
+
+    func switchSession(to id: UUID) {
+        guard !busy, id != activeSessionID, let session = sessions.first(where: { $0.id == id }) else { return }
+        rememberCurrentSession()
+        draft = session.draft
+        analysis = session.analysis
+        excludedCandidates = session.excludedCandidates
+        preparationNotes = session.preparationNotes
+        documentURL = session.documentURL
+        savedURL = session.savedURL
+        status = session.status
+        activeSessionID = session.id
+        installRecording()
+        installMusic()
+        if draft.start > 0 { seekToPrayerStart() }
+    }
+
+    private func prepareNewRecording(_ url: URL, defaults: ReviewDraft) async {
         var next = ReviewDraft()
         next.recording = url.path
         next.name = "매일의 기도 · " + url.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "_", with: " ")
-        next.background = draft.background
-        next.music = presetMusic.isEmpty ? draft.music : presetMusic
-        next.musicEnd = presetMusic.isEmpty ? draft.musicEnd : presetMusicEnd
+        next.background = defaults.background
+        next.music = presetMusic.isEmpty ? defaults.music : presetMusic
+        next.musicEnd = presetMusic.isEmpty ? defaults.musicEnd : presetMusicEnd
         draft = next
         clearAnalysis()
         documentURL = nil

@@ -26,6 +26,7 @@ struct UpdateNotice: Identifiable {
     let message: String
     var release: AvailableRelease?
     var download: URL?
+    var offersImport = false
 }
 
 @MainActor
@@ -36,40 +37,58 @@ final class ReleaseUpdates: ObservableObject {
     @Published var installing = false
     @Published var alert: UpdateNotice?
     private var checkedOnLaunch = false
+    var canCheckManually: Bool { checkedOnLaunch && !checking && !installing }
 
     var current: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
     }
 
     func check(manual: Bool = false) async {
-        guard !checking, !installing, manual || !checkedOnLaunch else { return }
-        checkedOnLaunch = true
+        guard manual ? canCheckManually : !checking && !installing && !checkedOnLaunch else { return }
+        if !manual { checkedOnLaunch = true }
         checking = true
         defer { checking = false }
         do {
-            var request = URLRequest(url: Self.feed, timeoutInterval: 12)
+            var request = URLRequest(url: Self.feed, cachePolicy: .reloadIgnoringLocalCacheData,
+                                     timeoutInterval: manual ? 12 : 5)
             request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
             request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
             if http.statusCode == 404 {
-                if manual { alert = UpdateNotice(title: "공개 릴리스 없음", message: "게시된 업데이트가 없습니다.") }
+                alert = manual ? UpdateNotice(title: "공개 릴리스 없음", message: "게시된 업데이트가 없습니다.")
+                    : Self.importNotice()
                 return
             }
             guard (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             let latest = try decoder.decode(GitHubRelease.self, from: data)
-            guard let release = try Self.available(latest, current: current) else {
-                if manual { alert = UpdateNotice(title: "최신 버전입니다", message: "현재 버전은 \(current)입니다.") }
+            let release = try Self.available(latest, current: current)
+            if !manual {
+                alert = Self.importNotice(release)
                 return
             }
-            alert = UpdateNotice(title: "업데이트가 있습니다", message: "현재 \(current) · 최신 \(release.version)", release: release)
-        } catch {
-            if manual {
-                alert = UpdateNotice(title: "업데이트 확인 실패", message: error.localizedDescription)
+            if let release {
+                alert = UpdateNotice(title: "업데이트가 있습니다", message: "현재 \(current) · 최신 \(release.version)", release: release)
+            } else {
+                alert = UpdateNotice(title: "최신 버전입니다", message: "현재 버전은 \(current)입니다.")
             }
+        } catch {
+            if Task.isCancelled {
+                if !manual { checkedOnLaunch = false }
+                return
+            }
+            alert = manual ? UpdateNotice(title: "업데이트 확인 실패", message: error.localizedDescription)
+                : Self.importNotice()
         }
+    }
+
+    private static func importNotice(_ release: AvailableRelease? = nil) -> UpdateNotice {
+        var message = "한 번에 최대 \(ReviewModel.importLimit)개를 가져올 수 있습니다."
+        if let release { message += "\n새 버전 v\(release.version)을 설치할 수 있습니다." }
+        return UpdateNotice(title: "새 영상을 가져올까요?", message: message,
+                            release: release, offersImport: true)
     }
 
     func install(_ release: AvailableRelease) async {

@@ -26,21 +26,6 @@ struct PrayerReviewApp: App {
                         }
                     }
                 }
-                .task { await updates.check() }
-                .alert(item: $updates.alert) { notice in
-                    if let release = notice.release {
-                        return Alert(title: Text(notice.title),
-                                     message: Text(notice.message + "\n설치 후 앱을 다시 실행합니다. 열린 작업은 먼저 저장해 주세요."),
-                                     primaryButton: .default(Text("설치 및 다시 실행")) { Task { await updates.install(release) } },
-                                     secondaryButton: .cancel(Text("나중에")))
-                    }
-                    if let download = notice.download {
-                        return Alert(title: Text(notice.title), message: Text(notice.message),
-                                     primaryButton: .default(Text("DMG 다운로드")) { NSWorkspace.shared.open(download) },
-                                     secondaryButton: .cancel(Text("닫기")))
-                    }
-                    return Alert(title: Text(notice.title), message: Text(notice.message), dismissButton: .default(Text("확인")))
-                }
                 .frame(minWidth: 1100, idealWidth: 1320, maxWidth: 1600,
                        minHeight: 760, idealHeight: 870, maxHeight: 1000)
         }
@@ -49,7 +34,7 @@ struct PrayerReviewApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("업데이트 확인…") { Task { await updates.check(manual: true) } }
-                    .disabled(updates.checking || updates.installing)
+                    .disabled(!updates.canCheckManually)
                 Button("설치 및 권한 안내…") { SetupGuide.open() }
             }
         }
@@ -87,6 +72,7 @@ struct ReviewView: View {
     @State private var previewIssue: String?
     @State private var selection: UUID?
     @State private var section = 0
+    @State private var choosingRecordings = false
 
     var draft: ReviewDraft { model.draft }
     var selectedCard: PreviewCard? { previewCards.isEmpty ? nil : previewCards[min(page, previewCards.count - 1)] }
@@ -103,6 +89,7 @@ struct ReviewView: View {
         ZStack {
             VStack(spacing: 0) {
                 header
+                if model.sessions.count > 1 { recordingSelector }
                 Divider()
                 HSplitView {
                     backgroundPanel.frame(minWidth: 275, idealWidth: 320, maxWidth: 365)
@@ -123,6 +110,7 @@ struct ReviewView: View {
         .task {
             SetupGuide.openOnceIfMissing()
             await model.initialize()
+            await updates.check()
         }
         .task(id: model.sharedAssets) {
             do {
@@ -147,8 +135,23 @@ struct ReviewView: View {
             }
         }
         .onChange(of: draft.recording) { selection = nil; page = 0 }
-        .onChange(of: draft.phrases) { if !model.busy { model.clearAnalysis() } }
-        .onChange(of: [draft.start, draft.end, draft.amenEnd]) { if !model.busy { model.clearAnalysis() } }
+        .alert(updates.alert?.title ?? "", isPresented: Binding(
+            get: { updates.alert != nil }, set: { if !$0 { updates.alert = nil } }
+        ), presenting: updates.alert) { notice in
+            if notice.offersImport {
+                Button("영상 선택…") { chooseRecordings() }
+            }
+            if let release = notice.release {
+                Button("설치 및 다시 실행") { Task { await updates.install(release) } }
+            }
+            if let download = notice.download {
+                Button("DMG 다운로드") { NSWorkspace.shared.open(download) }
+            }
+            Button(notice.offersImport || notice.release != nil ? "나중에" : "확인", role: .cancel) {}
+        } message: { notice in
+            Text(notice.release == nil ? notice.message :
+                    notice.message + "\n설치 후 앱을 다시 실행합니다. 열린 작업은 먼저 저장해 주세요.")
+        }
         .alert("작업을 확인해 주세요", isPresented: Binding(
             get: { model.error != nil }, set: { if !$0 { model.error = nil } }
         )) {
@@ -190,6 +193,10 @@ struct ReviewView: View {
                 .onTapGesture {}
             VStack(spacing: 12) {
                 Text("분석 진행 중").font(.title2.bold())
+                if let progress = model.importProgress, progress.total > 1 {
+                    Text("\(progress.position) / \(progress.total) · \(progress.filename)")
+                        .font(.callout.monospacedDigit()).lineLimit(1).truncationMode(.middle)
+                }
                 Text(model.status)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -248,20 +255,14 @@ struct ReviewView: View {
             Spacer()
             Button(updates.checking ? "확인 중…" : "업데이트 확인", systemImage: "arrow.trianglehead.clockwise") {
                 Task { await updates.check(manual: true) }
-            }.disabled(updates.checking || updates.installing)
+            }.disabled(!updates.canCheckManually)
             Button("공통 에셋", systemImage: "square.stack") {
                 pendingAssets = model.sharedAssets
                 showAssets = true
             }
             Button("새 영상…", systemImage: "plus.rectangle") {
-                if let url = model.openFile([.movie, .audio]) {
-                    section = 0
-                    Task {
-                        await model.newRecording(url)
-                        if !(model.analysis?.candidates.isEmpty ?? true) { section = 2 }
-                    }
-                }
-            }.keyboardShortcut("n")
+                chooseRecordings()
+            }.keyboardShortcut("n").disabled(choosingRecordings)
             Button("검토안 열기…", systemImage: "folder") {
                 if let url = model.openFile([.json]) { Task { await model.load(url) } }
             }.keyboardShortcut("o")
@@ -269,6 +270,47 @@ struct ReviewView: View {
         .padding(.horizontal, 22)
         .padding(.vertical, 15)
         .disabled(model.busy)
+    }
+
+    var recordingSelector: some View {
+        HStack(spacing: 10) {
+            Text("검토 영상").font(.caption).foregroundStyle(.secondary)
+            Menu {
+                ForEach(model.sessions) { session in
+                    Button {
+                        model.switchSession(to: session.id)
+                        section = model.analysis?.candidates.isEmpty == false ? 2 : 0
+                    } label: {
+                        if session.id == model.activeSessionID {
+                            Label(session.filename, systemImage: "checkmark")
+                        } else {
+                            Text(session.filename)
+                        }
+                    }
+                }
+            } label: {
+                Text(fileTitle(draft.recording)).lineLimit(1).truncationMode(.middle)
+            }
+            .frame(maxWidth: 390)
+            Text("\(model.sessions.count)개").font(.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 22)
+        .padding(.bottom, 8)
+        .disabled(model.busy)
+    }
+
+    func chooseRecordings() {
+        guard !choosingRecordings, !model.busy else { return }
+        choosingRecordings = true
+        Task {
+            defer { choosingRecordings = false }
+            let urls = await model.chooseRecordings()
+            guard !urls.isEmpty else { return }
+            section = 0
+            await model.importRecordings(urls)
+            if model.analysis?.candidates.isEmpty == false { section = 2 }
+        }
     }
 
     var backgroundPanel: some View {
