@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -5,6 +6,7 @@ struct GitHubRelease: Decodable {
     struct Asset: Decodable {
         let name: String
         let browserDownloadUrl: URL
+        let digest: String?
     }
     let tagName: String
     let draft: Bool
@@ -15,6 +17,7 @@ struct GitHubRelease: Decodable {
 struct AvailableRelease {
     let version: String
     let download: URL
+    let sha256: String
 }
 
 struct UpdateNotice: Identifiable {
@@ -22,6 +25,7 @@ struct UpdateNotice: Identifiable {
     let title: String
     let message: String
     var release: AvailableRelease?
+    var download: URL?
 }
 
 @MainActor
@@ -29,6 +33,7 @@ final class ReleaseUpdates: ObservableObject {
     nonisolated static let repository = "Pakpakgal/maeki-maker"
     static let feed = URL(string: "https://api.github.com/repos/" + repository + "/releases/latest")!
     @Published var checking = false
+    @Published var installing = false
     @Published var alert: UpdateNotice?
     private var checkedOnLaunch = false
 
@@ -37,7 +42,7 @@ final class ReleaseUpdates: ObservableObject {
     }
 
     func check(manual: Bool = false) async {
-        guard !checking, manual || !checkedOnLaunch else { return }
+        guard !checking, !installing, manual || !checkedOnLaunch else { return }
         checkedOnLaunch = true
         checking = true
         defer { checking = false }
@@ -67,6 +72,30 @@ final class ReleaseUpdates: ObservableObject {
         }
     }
 
+    func install(_ release: AvailableRelease) async {
+        guard !installing else { return }
+        installing = true
+        defer { installing = false }
+        let destination = Bundle.main.bundleURL.resolvingSymlinksInPath()
+        do {
+            try await Task.detached { try await UpdateInstaller.install(release, at: destination) }.value
+        } catch {
+            alert = UpdateNotice(title: "업데이트 설치 실패",
+                                  message: error.localizedDescription,
+                                  download: release.download)
+            return
+        }
+        do {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.createsNewApplicationInstance = true
+            _ = try await NSWorkspace.shared.openApplication(at: destination, configuration: configuration)
+            NSApp.terminate(nil)
+        } catch {
+            alert = UpdateNotice(title: "업데이트 설치 완료",
+                                  message: "버전 \(release.version)이 설치되었습니다. 앱을 종료한 뒤 다시 열어 주세요.")
+        }
+    }
+
     nonisolated static func available(_ release: GitHubRelease, current: String) throws -> AvailableRelease? {
         guard !release.draft, !release.prerelease,
               let old = numbers(current), let new = numbers(release.tagName),
@@ -76,10 +105,13 @@ final class ReleaseUpdates: ObservableObject {
         let expectedPath = "/\(repository)/releases/download/\(release.tagName)/\(name)"
         guard let asset = release.assets.first(where: { $0.name == name }),
               asset.browserDownloadUrl.scheme == "https", asset.browserDownloadUrl.host == "github.com",
-              asset.browserDownloadUrl.path == expectedPath else {
+              asset.browserDownloadUrl.path == expectedPath,
+              let digest = asset.digest, digest.range(of: "^sha256:[0-9a-f]{64}$",
+                                                        options: .regularExpression) != nil else {
             throw ReviewError("GitHub 릴리스에 올바른 설치 이미지가 없습니다.")
         }
-        return AvailableRelease(version: version, download: asset.browserDownloadUrl)
+        return AvailableRelease(version: version, download: asset.browserDownloadUrl,
+                                sha256: String(digest.dropFirst("sha256:".count)))
     }
 
     nonisolated private static func numbers(_ value: String) -> [Int]? {

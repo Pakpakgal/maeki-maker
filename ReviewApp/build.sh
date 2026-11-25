@@ -14,7 +14,8 @@ fi
 mkdir -p "$contents/MacOS" "$resources/ReviewApp"
 swiftc -swift-version 5 -parse-as-library -O -target arm64-apple-macos26.0 -framework AVKit \
     "$source_dir"/ReviewModel.swift "$source_dir"/ReviewApp.swift "$source_dir"/PrayerPreview.swift \
-    "$source_dir"/ReleaseUpdates.swift "$source_dir"/SetupGuide.swift -o "$contents/MacOS/PrayerReview"
+    "$source_dir"/ReleaseUpdates.swift "$source_dir"/SetupGuide.swift "$source_dir"/UpdateInstaller.swift \
+    -o "$contents/MacOS/PrayerReview"
 cp "$source_dir/Info.plist" "$contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$version" "$contents/Info.plist"
 plutil -replace CFBundleVersion -string "$version" "$contents/Info.plist"

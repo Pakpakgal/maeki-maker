@@ -8,14 +8,36 @@ struct PrayerReviewApp: App {
     @StateObject private var updates = ReleaseUpdates()
 
     var body: some Scene {
-        WindowGroup("매일의 기도 편집 검토") {
+        WindowGroup("매일의 기도 편집 검토 v\(updates.current)") {
             ReviewView()
+                .environmentObject(updates)
+                .disabled(updates.installing)
+                .overlay {
+                    if updates.installing {
+                        ZStack {
+                            Color.black.opacity(0.60).ignoresSafeArea()
+                            VStack(spacing: 12) {
+                                ProgressView()
+                                Text("업데이트 설치 중").font(.headline)
+                                Text("다운로드한 앱을 확인하고 설치하고 있습니다.").foregroundStyle(.secondary)
+                            }
+                            .padding(28)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                        }
+                    }
+                }
                 .task { await updates.check() }
                 .alert(item: $updates.alert) { notice in
                     if let release = notice.release {
-                        return Alert(title: Text(notice.title), message: Text(notice.message),
-                                     primaryButton: .default(Text("다운로드")) { NSWorkspace.shared.open(release.download) },
+                        return Alert(title: Text(notice.title),
+                                     message: Text(notice.message + "\n설치 후 앱을 다시 실행합니다. 열린 작업은 먼저 저장해 주세요."),
+                                     primaryButton: .default(Text("설치 및 다시 실행")) { Task { await updates.install(release) } },
                                      secondaryButton: .cancel(Text("나중에")))
+                    }
+                    if let download = notice.download {
+                        return Alert(title: Text(notice.title), message: Text(notice.message),
+                                     primaryButton: .default(Text("DMG 다운로드")) { NSWorkspace.shared.open(download) },
+                                     secondaryButton: .cancel(Text("닫기")))
                     }
                     return Alert(title: Text(notice.title), message: Text(notice.message), dismissButton: .default(Text("확인")))
                 }
@@ -27,7 +49,7 @@ struct PrayerReviewApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("업데이트 확인…") { Task { await updates.check(manual: true) } }
-                    .disabled(updates.checking)
+                    .disabled(updates.checking || updates.installing)
                 Button("설치 및 권한 안내…") { SetupGuide.open() }
             }
         }
@@ -53,6 +75,7 @@ struct SourcePlayer: NSViewRepresentable {
 }
 
 struct ReviewView: View {
+    @EnvironmentObject private var updates: ReleaseUpdates
     @StateObject private var model = ReviewModel()
     @State private var page = 0
     @State private var showCropGuides = false
@@ -216,10 +239,16 @@ struct ReviewView: View {
                 .padding(10)
                 .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
             VStack(alignment: .leading, spacing: 3) {
-                Text("매일의 기도").font(.title2.bold())
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("매일의 기도").font(.title2.bold())
+                    Text("v\(updates.current)").font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                }
                 Text("Palmier Pro에 보내기 전 편집안 검토").font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
+            Button(updates.checking ? "확인 중…" : "업데이트 확인", systemImage: "arrow.trianglehead.clockwise") {
+                Task { await updates.check(manual: true) }
+            }.disabled(updates.checking || updates.installing)
             Button("공통 에셋", systemImage: "square.stack") {
                 pendingAssets = model.sharedAssets
                 showAssets = true
