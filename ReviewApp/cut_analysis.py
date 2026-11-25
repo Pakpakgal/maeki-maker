@@ -9,6 +9,8 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from progress_log import report
+
 MODEL = "gemma4:12b"
 CHAT_URL = "http://127.0.0.1:11434/api/chat"
 CACHE = Path.home() / "Library/Caches/local.daily-prayer.review/transcripts"
@@ -263,6 +265,7 @@ def comparison_hints(rows, sermon):
 
 
 def analyze(draft, whisper, retained_spans, duration):
+    report(0.08, "삭제 검토 · 보존할 구간과 자막 시각 확인")
     spans = list(retained_spans(draft))
     recording_duration = duration(draft["recording"])
     if not math.isfinite(draft["end"]) or draft["end"] > recording_duration + 0.01:
@@ -281,6 +284,7 @@ def analyze(draft, whisper, retained_spans, duration):
     protected.update(range(last_sentence, len(rows)))
     excluded = {i for i, row in enumerate(rows) if any(
         cut["start"] <= row["sourceAt"] < cut["end"] for cut in draft["cuts"])}
+    report(0.20, "설교 전사와 기도 구간의 단어 시각을 확인하는 중")
     segments = transcribed_source(draft["recording"], 0, recording_duration, whisper)
     prayer_start = max(0, draft["start"] - 8)
     focused = transcribed_source(draft["recording"], prayer_start, draft["end"], whisper)
@@ -299,12 +303,15 @@ def analyze(draft, whisper, retained_spans, duration):
         "89초까지_줄일_시간_초": max(0, round(sum(b - a for a, b in spans) + 215 / 30 - 89, 2)),
         "설교에서_확인된_비교절_힌트": hints,
     }
+    report(0.55, "Gemma 4 · 설교 맥락, 말실수, 의미 중복 분석 중")
     result = ask_model(payload)
+    report(0.88, "삭제 후보의 앞뒤 발화와 컷 경계 검증 중")
     proposals = [*hints, *result.get("candidates", [])]
     unique = {(proposal.get("first"), proposal.get("resume")): proposal
               for proposal in reversed(proposals) if isinstance(proposal, dict)}
     candidates = make_candidates({"candidates": list(reversed(unique.values()))},
                                  draft, rows, word_tracks, protected | excluded)
+    report(1, f"검토 완료 · 삭제 후보 {len(candidates)}개")
     return {
         "summary": str(result.get("summary", "")).strip(), "candidates": candidates,
         "unverifiedCount": max(0, min(5, len(unique)) - len(candidates)),

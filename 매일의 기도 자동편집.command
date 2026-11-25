@@ -1,5 +1,5 @@
 #!/bin/zsh
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 cd -- "${0:A:h}" || exit 1
 if (( $# )); then
     recipe=$1
@@ -15,7 +15,11 @@ if [[ ! -f "$recipe" ]]; then
     print -u2 "입력 파일을 찾을 수 없습니다. $recipe"
     exit 1
 fi
-open -a PalmierPro || exit 1
+if ! open -b io.palmier.pro 2>/dev/null; then
+    [[ -f "설치 및 권한 안내.txt" ]] && open "설치 및 권한 안내.txt"
+    print -u2 'Palmier Pro를 찾지 못했습니다. 설치 및 권한 안내를 확인하세요.'
+    exit 1
+fi
 for attempt in {1..20}; do
     if curl --silent --output /dev/null --max-time 1 http://127.0.0.1:19789/mcp; then
         exec python3 build_prayer.py "$recipe"

@@ -1,0 +1,27 @@
+매일의 기도 편집 검토 · 설치 및 권한 안내
+
+1. Palmier Pro 설치
+Mac에 Palmier Pro가 없다면 아래 공식 사이트에서 macOS용 앱을 내려받아 응용 프로그램에 옮기고 한 번 실행하세요.
+https://www.palmier.io/
+
+Apple Silicon Mac과 macOS 26 이상이 필요합니다.
+Palmier Pro가 열린 상태에서 검토 앱의 ‘Palmier로 보내기’를 누르세요.
+검토 앱은 Palmier의 이 Mac 내부 편집 연결을 사용합니다.
+https://www.palmier.io/docs/agent-and-mcp
+
+2. macOS 권한 요청이 뜰 때
+• 문서 폴더는 기존 검토본과 에셋을 읽고 저장하는 데 씁니다. 다운로드 폴더는 그곳에서 원본이나 에셋을 사용할 때 필요합니다. 작업 폴더에 대한 요청이면 ‘허용’을 누르세요.
+• 이전에 거절했다면 시스템 설정 → 개인정보 보호 및 보안 → 파일 및 폴더에서 관련 앱에 필요한 폴더만 허용하세요.
+• 이 작업에는 전체 디스크 접근과 손쉬운 사용 권한이 필요하지 않습니다.
+• 검토 앱의 첫 실행이 차단되면 공식 GitHub 릴리스에서 받은 파일인지 확인하세요. 계속 열려면 앱 열기를 먼저 시도한 뒤 시스템 설정 → 개인정보 보호 및 보안에서 해당 앱의 ‘그래도 열기’를 확인하세요.
+  https://support.apple.com/ko-kr/102445
+
+3. 검토 앱 준비
+• 공통 에셋에서 자막 레이아웃 PNG, 교회 로고, 기본 배경음악을 지정하세요.
+• 영상 처리에는 Python 3와 FFmpeg가 필요합니다. 자동 전사에는 MLX Whisper와 로컬 모델 mlx-community/whisper-large-v3-turbo가 필요합니다.
+• AI 자막 묶기와 삭제 검토에는 Ollama를 실행하고 터미널에서 ollama pull gemma4:12b 를 한 번 실행하세요.
+• 미리보기와 Palmier에서 같은 글꼴이 나오려면 김정철명조와 Gmarket Sans Light를 설치하세요.
+
+검토 앱 다운로드와 자세한 사용법
+https://github.com/Pakpakgal/maeki-maker/releases/latest
+https://github.com/Pakpakgal/maeki-maker

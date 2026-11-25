@@ -10,6 +10,7 @@ import unicodedata
 from pathlib import Path
 
 from cut_analysis import ask_model, basic, transcribed_source
+from progress_log import report
 
 INVITATION = re.compile(r"기도(?:하겠습니다|합시다|하십시다|하시겠습니다|드리겠습니다|하겠어요|하도록하겠습니다)|함께기도(?:하겠습니다|합시다)")
 CLOSING = re.compile(r"(?:기도|말씀)(?:를|을)?(?:드립니다|합니다|드리옵나이다|하옵나이다|올립니다)|기도(?:드렸습니다|하였습니다)|이름으로(?:간절히)?기도")
@@ -214,7 +215,9 @@ def matching_photo(path, date):
 def prepare(path, whisper, captions, duration):
     path = path.resolve(strict=True)
     total = duration(str(path))
+    report(0.1, f"원본 확인 · {total / 60:.1f}분 · Whisper 전사 준비 중")
     segments = transcribed_source(str(path), 0, total, whisper)
+    report(0.55, "Whisper 전사 확인 · 기도 시작과 마지막 아멘을 찾는 중")
     words, stream, anchors = words_with_index(segments, total)
     last, clear_close = end_candidates(words, stream, anchors)
     if last is None:
@@ -227,6 +230,7 @@ def prepare(path, whisper, captions, duration):
     if first is None or first >= last:
         raise ValueError("기도 첫 단어를 구분하기 어렵습니다. 원본에서 첫 단어 위치를 확인하세요.")
     intro_end = words[marker]["end"] if marker is not None else None
+    report(0.65, "안내 멘트와 첫 기도 단어의 파형을 대조하는 중")
     start, intro_end, measured = refine_opening(str(path), words[first], intro_end, total)
     if intro_end is not None:
         intro_end = min(start, round(intro_end, 3))
@@ -249,6 +253,7 @@ def prepare(path, whisper, captions, duration):
         if not parts or parts[-1]["index"] != word["segment"] or index == last:
             parts.append({"index": word["segment"], "words": []})
         parts[-1]["words"].append(word)
+    report(0.82, f"기도 구간 {start:.2f}–{end:.2f}초 · Gemma 4로 자막 구절 정리 중")
     phrases = captions(parts, start, end)
     day = local_date(path)
     warnings = []
@@ -259,6 +264,7 @@ def prepare(path, whisper, captions, duration):
         warnings.append("같은 날짜의 배경 사진을 찾지 못해 현재 배경을 사용합니다.")
     if day is None:
         warnings.append("파일명에서 날짜를 찾지 못했습니다.")
+    report(1, f"구간 판별 완료 · 자막 {len(phrases)}개 · 날짜와 배경 확인")
     return {
         "start": start, "end": round(end, 3), "amenEnd": amen, "introEnd": intro_end,
         "phrases": phrases, "date": f"{day.year}년 {day.month}월 {day.day}일" if day else None,

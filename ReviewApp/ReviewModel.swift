@@ -65,6 +65,15 @@ struct PreparedPrayer: Decodable {
     let warnings: [String]
 }
 
+struct AnalysisLog: Decodable, Identifiable {
+    var id = UUID()
+    let progress: Double
+    let time: String
+    let text: String
+
+    enum CodingKeys: String, CodingKey { case progress, time, text }
+}
+
 struct ReviewDraft: Codable {
     var name = ""
     var date = ""
@@ -169,16 +178,18 @@ enum Runner {
     static let launcher = resources.appendingPathComponent("매일의 기도 자동편집.command")
     static let assetSettings = folder.appendingPathComponent("assets.json")
 
-    static func run(_ executable: URL, _ arguments: [String]) throws -> Data {
+    static func run(_ executable: URL, _ arguments: [String], progress: URL? = nil) throws -> Data {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
         process.currentDirectoryURL = folder
         var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        let localBin = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path
+        environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:\(localBin):/usr/bin:/bin"
         environment["MAEKI_WORKSPACE"] = folder.path
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        environment["MAEKI_PROGRESS_FILE"] = progress?.path
         process.environment = environment
         let output = Pipe()
         process.standardOutput = output
@@ -193,8 +204,8 @@ enum Runner {
         return data
     }
 
-    static func call(_ args: [String]) throws -> Data {
-        try run(URL(fileURLWithPath: "/usr/bin/env"), ["python3", bridge.path] + args)
+    static func call(_ args: [String], progress: URL? = nil) throws -> Data {
+        try run(URL(fileURLWithPath: "/usr/bin/env"), ["python3", bridge.path] + args, progress: progress)
     }
 
     static func encoder() -> JSONEncoder {
@@ -233,6 +244,8 @@ final class ReviewModel: ObservableObject {
     @Published var draft = ReviewDraft()
     @Published var busy = false
     @Published var analysisBusy = false
+    @Published var analysisProgress = 0.0
+    @Published var analysisLogs: [AnalysisLog] = []
     @Published var status = ""
     @Published var error: String?
     @Published var savedURL: URL?
@@ -346,14 +359,15 @@ final class ReviewModel: ObservableObject {
     func prepareRecording() async {
         busy = true
         analysisBusy = true
+        resetAnalysisProgress()
         preparationNotes = []
         status = "원본을 전사해 기도 시작과 아멘 끝을 찾는 중…"
         defer { busy = false; analysisBusy = false }
         let path = draft.recording
         do {
-            let prepared = try await Task.detached {
-                try JSONDecoder().decode(PreparedPrayer.self, from: Runner.call(["prepare", path]))
-            }.value
+            let prepared = try await trackProgress(0...0.62) { file in
+                try JSONDecoder().decode(PreparedPrayer.self, from: Runner.call(["prepare", path], progress: file))
+            }
             draft.start = prepared.start
             draft.end = prepared.end
             draft.amenEnd = prepared.amenEnd
@@ -371,9 +385,9 @@ final class ReviewModel: ObservableObject {
         status = "기도 구간과 자막 준비 완료 · 삭제 후보 분석 중…"
         do {
             let snapshot = draft
-            analysis = try await Task.detached {
-                try Self.runDraft(snapshot, command: "analyze", as: CutAnalysis.self)
-            }.value
+            analysis = try await trackProgress(0.62...1) { file in
+                try Self.runDraft(snapshot, command: "analyze", as: CutAnalysis.self, progress: file)
+            }
             status = "자동 준비 완료 · 자막 \(draft.phrases.count)개 · 삭제 후보 \(analysis?.candidates.count ?? 0)개"
         } catch {
             status = "기도 구간과 자막 준비 완료"
@@ -414,36 +428,71 @@ final class ReviewModel: ObservableObject {
     func transcribe() async {
         busy = true
         analysisBusy = true
+        resetAnalysisProgress()
         status = "이 Mac에서 선택 구간을 전사 중…"
         defer { busy = false; analysisBusy = false }
         let snapshot = draft
         do {
-            draft.phrases = try await Task.detached {
-                try Self.runDraft(snapshot, command: "transcribe", as: [Phrase].self)
-            }.value
+            draft.phrases = try await trackProgress(0...1) { file in
+                try Self.runDraft(snapshot, command: "transcribe", as: [Phrase].self, progress: file)
+            }
             status = "전사 초안 \(draft.phrases.count)개 생성 · 원본과 대조해 주세요."
         } catch { self.error = error.localizedDescription }
     }
 
     nonisolated private static func runDraft<T: Decodable>(_ draft: ReviewDraft, command: String,
-                                                            as type: T.Type) throws -> T {
+                                                            as type: T.Type, progress: URL) throws -> T {
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         try Runner.encoder().encode(draft).write(to: temp, options: .atomic)
         defer { try? FileManager.default.removeItem(at: temp) }
-        return try JSONDecoder().decode(type, from: Runner.call([command, temp.path]))
+        return try JSONDecoder().decode(type, from: Runner.call([command, temp.path], progress: progress))
+    }
+
+    private func resetAnalysisProgress() {
+        analysisProgress = 0
+        analysisLogs = []
+    }
+
+    private func trackProgress<T>(_ range: ClosedRange<Double>, work: @escaping @Sendable (URL) throws -> T) async throws -> T {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("maeki-\(UUID().uuidString).jsonl")
+        var seen = 0
+        func drain() {
+            guard let content = try? String(contentsOf: file, encoding: .utf8) else { return }
+            for line in content.split(separator: "\n").dropFirst(seen) {
+                guard let event = try? JSONDecoder().decode(AnalysisLog.self, from: Data(line.utf8)) else { break }
+                seen += 1
+                analysisLogs.append(event)
+                let fraction = min(1, max(0, event.progress))
+                analysisProgress = max(analysisProgress, range.lowerBound + (range.upperBound - range.lowerBound) * fraction)
+                status = event.text
+            }
+        }
+        let watcher = Task {
+            while !Task.isCancelled {
+                drain()
+                try? await Task.sleep(for: .milliseconds(160))
+            }
+        }
+        defer {
+            watcher.cancel()
+            drain()
+            try? FileManager.default.removeItem(at: file)
+        }
+        return try await Task.detached { try work(file) }.value
     }
 
     func analyzeCuts() async {
         busy = true
         analysisBusy = true
+        resetAnalysisProgress()
         clearAnalysis()
         status = "원본을 전사하고 로컬 AI로 맥락을 분석 중…"
         defer { busy = false; analysisBusy = false }
         let snapshot = draft
         do {
-            analysis = try await Task.detached {
-                try Self.runDraft(snapshot, command: "analyze", as: CutAnalysis.self)
-            }.value
+            analysis = try await trackProgress(0...1) { file in
+                try Self.runDraft(snapshot, command: "analyze", as: CutAnalysis.self, progress: file)
+            }
             status = "AI 분석 완료 · 검토 후보 \(analysis?.candidates.count ?? 0)개"
         } catch {
             status = "AI 분석 중단"
@@ -603,6 +652,11 @@ final class ReviewModel: ObservableObject {
     }
 
     func sendToPalmier() async {
+        guard SetupGuide.palmierInstalled else {
+            SetupGuide.open()
+            status = "Palmier Pro를 설치한 뒤 다시 보내세요."
+            return
+        }
         do {
             try FileManager.default.createDirectory(at: Runner.outputFolder, withIntermediateDirectories: true)
             let name = draft.name.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespacesAndNewlines)

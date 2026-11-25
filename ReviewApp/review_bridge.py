@@ -18,6 +18,7 @@ from build_prayer import (
 )
 
 from caption_grouping import caption_rows
+from progress_log import report
 
 FPS = 30
 
@@ -150,8 +151,12 @@ def transcribe(draft):
     start, end = draft["start"], draft["end"]
     if not 0 <= start < end <= media_duration(draft["recording"]) + 0.01:
         raise ValueError("전사하기 전에 유효한 기도 시작·끝 시각을 지정하세요.")
+    report(0.1, f"선택 구간 전사 · 원본 {start:.2f}–{end:.2f}초")
     segments = whisper_segments(draft["recording"], start, end)
-    return caption_rows(segments, start, end, start)
+    report(0.65, "Whisper 전사 완료 · Gemma 4로 자막 구절 정리 중")
+    cues = caption_rows(segments, start, end, start)
+    report(1, f"자막 초안 {len(cues)}개 준비 완료")
+    return cues
 
 
 def compile_job(draft, crop_path):

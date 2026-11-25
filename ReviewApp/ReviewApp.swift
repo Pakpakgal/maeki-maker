@@ -28,6 +28,7 @@ struct PrayerReviewApp: App {
             CommandGroup(after: .appInfo) {
                 Button("업데이트 확인…") { Task { await updates.check(manual: true) } }
                     .disabled(updates.checking)
+                Button("설치 및 권한 안내…") { SetupGuide.open() }
             }
         }
     }
@@ -97,6 +98,7 @@ struct ReviewView: View {
         .tint(accent)
         .background(.background)
         .task {
+            SetupGuide.openOnceIfMissing()
             await model.initialize()
         }
         .task(id: model.sharedAssets) {
@@ -163,18 +165,41 @@ struct ReviewView: View {
             Color.black.opacity(0.60)
                 .ignoresSafeArea()
                 .onTapGesture {}
-            VStack(spacing: 14) {
-                ProgressView().controlSize(.large)
+            VStack(spacing: 12) {
                 Text("분석 진행 중").font(.title2.bold())
                 Text(model.status)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
+                ProgressView(value: model.analysisProgress)
+                    .progressViewStyle(.linear)
+                    .accessibilityLabel("처리 단계 진행률")
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 3) {
+                            ForEach(model.analysisLogs) { event in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Text(event.time).monospacedDigit().foregroundStyle(.secondary)
+                                    Text(event.text).textSelection(.enabled)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }.id(event.id)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .onChange(of: model.analysisLogs.count) {
+                        if let last = model.analysisLogs.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                    .font(.caption)
+                    .frame(height: 63)
+                    .padding(8)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                    .accessibilityLabel("분석 로그")
+                }
             }
             .padding(.horizontal, 38)
             .padding(.vertical, 30)
-            .frame(width: 390)
+            .frame(width: 490)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
             .overlay { RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.16)) }
             .shadow(color: .black.opacity(0.4), radius: 24, y: 10)
