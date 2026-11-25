@@ -40,7 +40,6 @@ struct PreviewPreset: Decodable {
     let subtitleFont: String
     let subtitleSize: Double
     let lineSpacing: Double
-    let rowsPerPage: Int
     let blur: Double
     let matte: Double
     let bodyMatte: Double
@@ -80,14 +79,13 @@ enum PrayerPreview {
         }
         let layout = try artwork(preset.layout, size: Int(canvas.height))
         let logo = try artwork(preset.logo)
-        let count = max(1, (request.texts.count + preset.rowsPerPage - 1) / preset.rowsPerPage)
+        let captions = request.texts.isEmpty ? [[]] : try Runner.subtitlePages(request.texts)
         var pages: [PreviewCard] = []
-        for index in 0..<count {
+        for (index, rows) in captions.enumerated() {
             let ctx = try context()
             drawBackground(prayerBackground, in: ctx, opacity: preset.matte)
             dim(preset.bodyMatte, in: ctx)
             ctx.draw(layout, in: canvas)
-            let rows = request.texts.dropFirst(index * preset.rowsPerPage).prefix(preset.rowsPerPage)
             for (row, text) in rows.enumerated() {
                 let centerY = 0.5 + (Double(row) - Double(rows.count - 1) / 2) * preset.lineSpacing
                 try drawText(text, font: preset.subtitleFont, size: preset.subtitleSize,
@@ -118,7 +116,7 @@ enum PrayerPreview {
         ending.draw(logo, in: CGRect(x: (g.centerX - g.width / 2) * canvas.width,
                                       y: (1 - g.centerY - g.height / 2) * canvas.height + 1,
                                       width: g.width * canvas.width, height: g.height * canvas.height - 1))
-        pages.append(PreviewCard(id: count, title: "엔딩", image: try finished(ending)))
+        pages.append(PreviewCard(id: captions.count, title: "엔딩", image: try finished(ending)))
         return pages
     }
 

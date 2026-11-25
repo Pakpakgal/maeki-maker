@@ -13,8 +13,8 @@ WORKSPACE = Path(os.environ.get("MAEKI_WORKSPACE", ROOT))
 sys.path.insert(0, str(ROOT))
 from build_prayer import (
     BACKGROUND_MATTE, DATE_Y, OUTRO_LOGO, OUTRO_WORDS, PRAYER_BACKGROUND_BLUR, PRAYER_MATTE,
-    SUBTITLE_FONT, SUBTITLE_FONT_SIZE, SUBTITLE_LINE_SPACING, SUBTITLE_ROWS,
-    align_prayer_opening, outro_text_style, subtitle_phrases, validate,
+    SUBTITLE_FONT, SUBTITLE_FONT_SIZE, SUBTITLE_LINE_SPACING,
+    align_prayer_opening, outro_text_style, subtitle_page_ranges, subtitle_phrases, validate,
 )
 
 from caption_grouping import caption_rows
@@ -87,7 +87,7 @@ def preview_style():
         "layout": job["layout"], "logo": job["logo"], "logoGeometry": OUTRO_LOGO,
         "date": {**job["date"], "x": 0.5, "y": DATE_Y},
         "subtitleFont": SUBTITLE_FONT, "subtitleSize": SUBTITLE_FONT_SIZE,
-        "lineSpacing": SUBTITLE_LINE_SPACING, "rowsPerPage": SUBTITLE_ROWS,
+        "lineSpacing": SUBTITLE_LINE_SPACING,
         "blur": PRAYER_BACKGROUND_BLUR, "matte": BACKGROUND_MATTE, "bodyMatte": PRAYER_MATTE,
         "words": [{"text": word, **outro_text_style(*geometry)} for word, *geometry in OUTRO_WORDS],
     }
@@ -224,6 +224,9 @@ def main():
         result = {key: template_job()[key] for key in ("layout", "logo", "music")}
     elif command == "preview-style":
         result = preview_style()
+    elif command == "subtitle-pages":
+        texts = json.loads(Path(args[0]).read_text(encoding="utf-8"))
+        result = [texts[first:limit] for first, limit in subtitle_page_ranges(texts)]
     elif command == "load":
         result = load(args[0])
     elif command == "compile":

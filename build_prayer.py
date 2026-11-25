@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -219,12 +220,58 @@ def subtitle_phrases(job):
     return phrases
 
 
+PRAYER_CLOSING = re.compile(
+    r"(?:(?:이모든|모든|지금까지드린)(?:말씀|기도|간구)(?:을|를)?)?"
+    r"(?:(?:(?:우리(?:의)?|나의)?(?:구주|주)?"
+    r"(?:예수(?:그리스도)?(?:님)?|그리스도(?:님)?|주님|주|구주)(?:의)?)?"
+    r"이름(?:으로(?:써)?|을)?(?:받들어|의지하여)?)?"
+    r"(?:(?:감사하며|감사드리며|간절히|겸손히|함께))*"
+    r"(?:기도|간구)(?:를)?"
+    r"(?:(?:하|드리|드려|올리|올려)(?:옵나이다|옵니다|나이다|아요|요|오니)"
+    r"|(?:합|드립|올립|했습|드렸습|올렸습|마칩)니다)"
+    r"(?:아멘)+$"
+)
+AMEN_ONLY = re.compile(r"(?:아멘)+")
+
+
+def closing_row(texts):
+    # Search only the tail that can fit on one page. Joining compact text
+    # also recognizes a formula that was already split across several cues.
+    first = max(0, len(texts) - SUBTITLE_ROWS)
+    rows = [re.sub(r"[^가-힣]", "", unicodedata.normalize("NFC", text))
+            for text in texts[first:]]
+    closing = PRAYER_CLOSING.search("".join(rows))
+    if closing:
+        offset = closing.start()
+        for index, row in enumerate(rows, first):
+            if offset < len(row):
+                return index
+            offset -= len(row)
+    if rows and AMEN_ONLY.fullmatch(rows[-1]):
+        # An unfamiliar ending can still keep its final response with the previous line.
+        index = len(rows) - 1
+        while index > 0 and AMEN_ONLY.fullmatch(rows[index]):
+            index -= 1
+        return first + index
+    return len(texts)
+
+
+def subtitle_page_ranges(texts):
+    closing = closing_row(texts)
+    start = 0
+    while start < len(texts):
+        end = min(start + SUBTITLE_ROWS, len(texts))
+        if start < closing < end < len(texts):
+            end = closing
+        yield start, end
+        start = end
+
+
 def add_subtitle_pages(app, job, body):
     phrases = subtitle_phrases(job)
     entries = []
     fading = {}
-    for first in range(0, len(phrases), SUBTITLE_ROWS):
-        limit = first + SUBTITLE_ROWS
+    for first, limit in subtitle_page_ranges([cue["text"] for cue in phrases]):
         page = phrases[first:limit]
         page_end = subtitle_start(job, phrases[limit]) if limit < len(phrases) else body
         last_start = subtitle_start(job, page[-1])

@@ -208,6 +208,13 @@ enum Runner {
         try run(URL(fileURLWithPath: "/usr/bin/env"), ["python3", bridge.path] + args, progress: progress)
     }
 
+    static func subtitlePages(_ texts: [String]) throws -> [[String]] {
+        let input = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: input) }
+        try JSONEncoder().encode(texts).write(to: input, options: .atomic)
+        return try JSONDecoder().decode([[String]].self, from: call(["subtitle-pages", input.path]))
+    }
+
     static func encoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
