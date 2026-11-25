@@ -1,0 +1,19 @@
+# Keep local footage, manifests, generated media and credentials out of the public repository.
+/*
+!/.gitignore
+!/README.md
+!/VERSION
+!/CHANGELOG.md
+!/defaults.json
+!/build_prayer.py
+!/매일의 기도 자동편집.command
+!/ReviewApp/
+!/scripts/
+!/.github/
+__pycache__/
+.DS_Store
+/ReviewApp/*
+!/ReviewApp/*.swift
+!/ReviewApp/*.py
+!/ReviewApp/build.sh
+!/ReviewApp/Info.plist

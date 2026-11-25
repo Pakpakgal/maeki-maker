@@ -1,0 +1,35 @@
+name: Release macOS DMG
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches VERSION
+        run: test "${GITHUB_REF_NAME}" = "v$(cat VERSION)"
+      - name: Build DMG
+        run: ./scripts/release.sh
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset="dist/MaekiMaker-${GITHUB_REF_NAME}.dmg"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | grep -Fx "$(basename "$asset")" || gh release upload "$GITHUB_REF_NAME" "$asset"
+          else
+            gh release create "$GITHUB_REF_NAME" "$asset" --verify-tag --title "매일의 기도 편집 검토 $GITHUB_REF_NAME" --generate-notes
+          fi
